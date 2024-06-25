@@ -4,10 +4,27 @@ import torch
 from tqdm import tqdm
 
 from utils.utils import get_lr
-        
+import torch
+import torch.nn as nn
+import torch.nn.functional as F #连续插入
+def Focal_Loss(inputs, target, num_classes=2, alpha=0.5, gamma=2):
+    n, c, h, w = inputs.size()
+    nt, ht, wt = target.size()
+    if h != ht and w != wt:
+        inputs = F.interpolate(inputs, size=(ht, wt), mode="bilinear", align_corners=True)
+    temp_inputs = inputs.transpose(1, 2).transpose(2, 3).contiguous().view(-1, c)
+    temp_target = target.view(-1)
+    logpt  = -nn.CrossEntropyLoss(ignore_index=num_classes, reduction='none')(temp_inputs, temp_target.to(torch.int64))
+    pt = torch.exp(logpt)
+    if alpha is not None:
+        logpt *= alpha
+    loss = -((1 - pt) ** gamma) * logpt
+    loss = loss.mean()
+    return loss
 def fit_one_epoch(model_train, model, ema, yolo_loss, loss_history, eval_callback, optimizer, epoch, epoch_step, epoch_step_val, gen, gen_val, Epoch, cuda, fp16, scaler, save_period, save_dir, local_rank=0):
     loss        = 0
     val_loss    = 0
+    aux_loss    = 0
 
     if local_rank == 0:
         # print('Start Train')
@@ -17,7 +34,7 @@ def fit_one_epoch(model_train, model, ema, yolo_loss, loss_history, eval_callbac
         if iteration >= epoch_step:
             break
 
-        images, bboxes = batch
+        images, bboxes, pngs = batch
         with torch.no_grad():
             if cuda:
                 images = images.cuda(local_rank)
@@ -45,8 +62,10 @@ def fit_one_epoch(model_train, model, ema, yolo_loss, loss_history, eval_callbac
                 #----------------------#
                 #   前向传播
                 #----------------------#
-                outputs         = model_train(images)
-                loss_value = yolo_loss(outputs, bboxes)
+                dbox, cls, origin_cls, anchors, strides, png= model_train(images)
+                outputs = (dbox, cls, origin_cls, anchors, strides)
+                loss_seg=Focal_Loss(png,pngs.to(png.device),2)
+                loss_value = loss_seg*300+yolo_loss(outputs, bboxes)
 
             #----------------------#
             #   反向传播
@@ -60,10 +79,10 @@ def fit_one_epoch(model_train, model, ema, yolo_loss, loss_history, eval_callbac
             ema.update(model_train)
 
         loss += loss_value.item()
+        aux_loss += loss_seg.item()
         
         if local_rank == 0:
-            pbar.set_postfix(**{'loss'  : loss / (iteration + 1), 
-                                'lr'    : get_lr(optimizer)})
+            pbar.set_postfix(**{'损':loss/(iteration+1),'辅':aux_loss/(iteration+1)*300,'lr':get_lr(optimizer)})
             pbar.update(1)
 
     if local_rank == 0:

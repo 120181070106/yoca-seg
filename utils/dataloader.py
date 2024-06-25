@@ -39,22 +39,23 @@ class YoloDataset(Dataset):
         #   训练时进行数据的随机增强
         #   验证时不进行数据的随机增强
         #---------------------------------------------------#
-        if self.mosaic and self.rand() < self.mosaic_prob and self.epoch_now < self.epoch_length * self.special_aug_ratio:
-            lines = sample(self.annotation_lines, 3)
-            lines.append(self.annotation_lines[index])
-            shuffle(lines)
-            image, box  = self.get_random_data_with_Mosaic(lines, self.input_shape)
+#         if self.mosaic and self.rand() < self.mosaic_prob and self.epoch_now < self.epoch_length * self.special_aug_ratio:
+#             lines = sample(self.annotation_lines, 3)
+#             lines.append(self.annotation_lines[index])
+#             shuffle(lines)
+#             image, box  = self.get_random_data_with_Mosaic(lines, self.input_shape)
             
-            if self.mixup and self.rand() < self.mixup_prob:
-                lines           = sample(self.annotation_lines, 1)
-                image_2, box_2  = self.get_random_data(lines[0], self.input_shape, random = self.train)
-                image, box      = self.get_random_data_with_MixUp(image, box, image_2, box_2)
-        else:
-            image, box      = self.get_random_data(self.annotation_lines[index], self.input_shape, random = self.train)
+#             if self.mixup and self.rand() < self.mixup_prob:
+#                 lines           = sample(self.annotation_lines, 1)
+#                 image_2, box_2  = self.get_random_data(lines[0], self.input_shape, random = self.train)
+#                 image, box      = self.get_random_data_with_MixUp(image, box, image_2, box_2)
+#         else:
+        image,png, box      = self.get_random_data(self.annotation_lines[index], self.input_shape, random = self.train)
 
         image       = np.transpose(preprocess_input(np.array(image, dtype=np.float32)), (2, 0, 1))
         box         = np.array(box, dtype=np.float32)
-        
+        png         = np.array(png)
+        png[png >= self.num_classes] = self.num_classes
         #---------------------------------------------------#
         #   对真实框进行预处理
         #---------------------------------------------------#
@@ -81,7 +82,7 @@ class YoloDataset(Dataset):
             labels_out[:, 1] = box[:, -1]
             labels_out[:, 2:] = box[:, :4]
             
-        return image, labels_out
+        return image, png, labels_out
 
     def rand(self, a=0, b=1):
         return np.random.rand()*(b-a) + a
@@ -93,6 +94,8 @@ class YoloDataset(Dataset):
         #------------------------------#
         image   = Image.open(line[0])
         image   = cvtColor(image)
+        label = Image.open(line[0].replace("JPEGImages", "SegmentationClass").replace(".jpg", ".png"))
+        label   = Image.fromarray(np.array(label))
         #------------------------------#
         #   获得图像的高宽与目标高宽
         #------------------------------#
@@ -117,7 +120,9 @@ class YoloDataset(Dataset):
             new_image   = Image.new('RGB', (w,h), (128,128,128))
             new_image.paste(image, (dx, dy))
             image_data  = np.array(new_image, np.float32)
-
+            label       = label.resize((nw,nh), Image.NEAREST)
+            new_label   = Image.new('L', [w, h], (0))
+            new_label.paste(label, ((w-nw)//2, (h-nh)//2))
             #---------------------------------#
             #   对真实框进行调整
             #---------------------------------#
@@ -132,7 +137,7 @@ class YoloDataset(Dataset):
                 box_h = box[:, 3] - box[:, 1]
                 box = box[np.logical_and(box_w>1, box_h>1)] # discard invalid box
 
-            return image_data, box
+            return image_data, new_label, box
                 
         #------------------------------------------#
         #   对图像进行缩放并且进行长和宽的扭曲
@@ -146,22 +151,25 @@ class YoloDataset(Dataset):
             nw = int(scale*w)
             nh = int(nw/new_ar)
         image = image.resize((nw,nh), Image.BICUBIC)
-
+        label = label.resize((nw,nh), Image.NEAREST)
         #------------------------------------------#
         #   将图像多余的部分加上灰条
         #------------------------------------------#
         dx = int(self.rand(0, w-nw))
         dy = int(self.rand(0, h-nh))
         new_image = Image.new('RGB', (w,h), (128,128,128))
+        new_label = Image.new('L', (w,h), (0))
         new_image.paste(image, (dx, dy))
+        new_label.paste(label, (dx, dy))
         image = new_image
-
+        label = new_label
         #------------------------------------------#
         #   翻转图像
         #------------------------------------------#
         flip = self.rand()<.5
-        if flip: image = image.transpose(Image.FLIP_LEFT_RIGHT)
-
+        if flip: 
+            image = image.transpose(Image.FLIP_LEFT_RIGHT)
+            label = label.transpose(Image.FLIP_LEFT_RIGHT)
         image_data      = np.array(image, np.uint8)
         #---------------------------------#
         #   对图像进行色域变换
@@ -199,7 +207,7 @@ class YoloDataset(Dataset):
             box_h = box[:, 3] - box[:, 1]
             box = box[np.logical_and(box_w>1, box_h>1)] 
         
-        return image_data, box
+        return image_data, label, box
     
     def merge_bboxes(self, bboxes, cutx, cuty):
         merge_bbox = []
@@ -392,15 +400,19 @@ class YoloDataset(Dataset):
 # DataLoader中collate_fn使用
 def yolo_dataset_collate(batch):
     images  = []
+    pngs    = [] #加入了掩码标签的分批，建议全部替换原函数
     bboxes  = []
-    for i, (img, box) in enumerate(batch):
+    for i, (img, png, box) in enumerate(batch):
+        # print(png.shape)
         images.append(img)
+        pngs.append(png)
         box[:, 0] = i
         bboxes.append(box)
-            
     images  = torch.from_numpy(np.array(images)).type(torch.FloatTensor)
+    pngs  = torch.from_numpy(np.array(pngs)).type(torch.FloatTensor)
     bboxes  = torch.from_numpy(np.concatenate(bboxes, 0)).type(torch.FloatTensor)
-    return images, bboxes
+    # print(images.shape,bboxes.shape,pngs.shape)
+    return images, bboxes, pngs
 
 # # DataLoader中collate_fn使用
 # def yolo_dataset_collate(batch):
