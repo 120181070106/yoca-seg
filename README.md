@@ -112,7 +112,7 @@ class Backbone(nn.Module):
         png = nn.functional.interpolate(pr,size=(640,640),mode='bilinear')
         pr = nn.functional.softmax(pr,dim = 1).argmax(axis=1).unsqueeze(1)
         image = torchvision.transforms.ToPILImage()(pr[0].byte()*255)
-        image.save('lo/pr.png') #上面连着插入#x=self.dark2(x)代替第一个dark里的内容
+        image.save('logs/pr.png') #上面连着插入#x=self.dark2(x)代替首dark里的内容
         return feat1, feat2, feat3, png#额外输出png算损
 
 #----------------------(yolo.py)---------------------#
@@ -129,10 +129,10 @@ class DecodeBox():
         dbox, cls, origin_cls, anchors, strides, png = inputs[:6] #添加png但不用
 
 #----------------------(yolo.py)---------------------#
-    "model_path"        : 'l.pth', #自训的权重
+    "model_path"        : 'b外割756.pth', #自训的权重
 
 #----------------------(train.py)---------------------#
-    model_path      = 'l.pth'#'model_data/yolov8_s.pth'
+    model_path      = 'b外割756.pth.pth'#'model_data/yolov8_s.pth'
     Freeze_Train        = False
 
 #----------------------(utils_fit.py)---------------------#
