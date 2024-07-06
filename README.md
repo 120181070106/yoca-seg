@@ -104,8 +104,6 @@ class Seg(nn.Module):#分割块
 
 class Backbone(nn.Module):
     self.seg = Seg() #代替原四个dark
-    self.dark2 = Tb(16); self.dark3 = Tb(32)
-    self.dark4 = Tb(64); self.dark5 = Tb(128)
     def forward(self, x):
         # x = self.stem(x)
         pr = self.seg(x)
